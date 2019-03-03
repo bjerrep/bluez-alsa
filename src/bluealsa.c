@@ -57,6 +57,9 @@ struct ba_config config = {
 	.a2dp.force_44100 = false,
 	.a2dp.keep_alive = 0,
 
+	.a2dp.direct_fifo = FIFO_OFF,
+	.a2dp.direct_fifo_inband = false,
+
 #if ENABLE_AAC
 	/* There are two issues with the afterburner: a) it uses a LOT of power,
 	 * b) it generates larger payload. These two reasons are good enough to

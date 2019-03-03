@@ -72,6 +72,13 @@ enum ba_transport_signal {
 	TRANSPORT_SEND_RFCOMM,
 };
 
+enum ba_fifo_audio {
+	FIFO_OFF,
+	FIFO_PCM,
+	FIFO_RTP,
+	FIFO_STREAM
+};
+
 struct ba_device {
 
 	/* ID of the underlying HCI device */
@@ -224,6 +231,8 @@ struct ba_transport {
 
 		} sco;
 
+		enum ba_fifo_audio direct_fifo;
+		bool direct_fifo_inband;
 	};
 
 	/* indicates cleanup lock */
@@ -244,12 +253,16 @@ struct ba_transport *transport_new(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
-		const char *dbus_path);
+		const char *dbus_path,
+		enum ba_fifo_audio fifo_audio,
+		bool direct_fifo_inband);
 struct ba_transport *transport_new_a2dp(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
 		const char *dbus_path,
+		enum ba_fifo_audio fifo_audio,
+		bool direct_fifo_inband,
 		const uint8_t *cconfig,
 		size_t cconfig_size);
 struct ba_transport *transport_new_rfcomm(

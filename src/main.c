@@ -83,6 +83,8 @@ int main(int argc, char **argv) {
 		{ "a2dp-force-audio-cd", no_argument, NULL, 7 },
 		{ "a2dp-keep-alive", required_argument, NULL, 8 },
 		{ "a2dp-volume", no_argument, NULL, 9 },
+		{ "a2dp-fifo", required_argument, NULL, 'f' },
+		{ "inband", no_argument, NULL, 's'},
 #if ENABLE_AAC
 		{ "aac-afterburner", no_argument, NULL, 4 },
 		{ "aac-vbr-mode", required_argument, NULL, 5 },
@@ -155,6 +157,8 @@ int main(int argc, char **argv) {
 					"  --a2dp-force-audio-cd\tforce 44.1 kHz sampling\n"
 					"  --a2dp-keep-alive=SEC\tkeep A2DP transport alive\n"
 					"  --a2dp-volume\t\tcontrol volume natively\n"
+					"  --a2dp-fifo=format\tpcm, rtp or stream\n"
+					"  -s, --inband\t\tinband signalling of eg volume in direct mode\n"
 #if ENABLE_AAC
 					"  --aac-afterburner\tenable afterburner\n"
 					"  --aac-vbr-mode=NB\tset VBR mode to NB\n"
@@ -264,6 +268,22 @@ int main(int argc, char **argv) {
 			break;
 		case 9 /* --a2dp-volume */ :
 			config.a2dp.volume = true;
+			break;
+		case 'f' /* --a2dp-fifo=pcm|rtp|stream */ : {
+			if (!strcasecmp(optarg, "pcm"))
+				config.a2dp.direct_fifo = FIFO_PCM;
+			else if (!strcasecmp(optarg, "rtp"))
+				config.a2dp.direct_fifo = FIFO_RTP;
+			else if (!strcasecmp(optarg, "stream"))
+				config.a2dp.direct_fifo = FIFO_STREAM;
+			else {
+				error("Invalid fifo format: %s", optarg);
+				return EXIT_FAILURE;
+			}
+			break;
+		}
+		case 's' /* --inband */ :
+			config.a2dp.direct_fifo_inband = true;
 			break;
 
 #if ENABLE_AAC

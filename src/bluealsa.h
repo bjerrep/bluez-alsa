@@ -100,6 +100,9 @@ struct ba_config {
 		 * time. This option applies for the source profile only. */
 		int keep_alive;
 
+		int direct_fifo;
+		bool direct_fifo_inband;
+
 	} a2dp;
 
 #if ENABLE_AAC

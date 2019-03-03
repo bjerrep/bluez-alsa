@@ -594,7 +594,7 @@ static int bluez_endpoint_set_configuration(GDBusMethodInvocation *inv, void *us
 	}
 
 	if ((t = transport_new_a2dp(d, g_dbus_bluez_object_path_to_transport_type(path),
-					sender, transport, configuration, size)) == NULL) {
+					sender, transport, config.a2dp.direct_fifo, config.a2dp.direct_fifo_inband, configuration, size)) == NULL) {
 		error("Couldn't create new transport: %s", strerror(errno));
 		goto fail;
 	}

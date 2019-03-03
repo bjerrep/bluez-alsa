@@ -45,6 +45,7 @@ void snd_pcm_scale_s16le(int16_t *buffer, size_t size, int channels,
 
 const char *bluetooth_a2dp_codec_to_string(uint16_t codec);
 const char *ba_transport_type_to_string(struct ba_transport_type type);
+const char *bluetooth_fifo_to_string(enum ba_fifo_audio fifo);
 
 #if ENABLE_AAC
 #include <fdk-aac/aacdecoder_lib.h>

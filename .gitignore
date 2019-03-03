@@ -40,3 +40,10 @@
 Makefile.in
 config.h.in
 *~
+
+# IDEs
+*.config
+*.creator
+*.creator.user
+*.files
+*.includes

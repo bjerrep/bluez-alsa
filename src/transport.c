@@ -189,7 +189,9 @@ struct ba_transport *transport_new(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
-		const char *dbus_path) {
+		const char *dbus_path,
+		enum ba_fifo_audio fifo_audio,
+		bool direct_fifo_inband) {
 
 	struct ba_transport *t;
 	int err;
@@ -199,6 +201,9 @@ struct ba_transport *transport_new(
 
 	t->device = device;
 	t->type = type;
+	t->direct_fifo = fifo_audio;
+	t->direct_fifo_inband = direct_fifo_inband;
+
 
 	pthread_mutex_init(&t->mutex, NULL);
 
@@ -242,12 +247,14 @@ struct ba_transport *transport_new_a2dp(
 		struct ba_transport_type type,
 		const char *dbus_owner,
 		const char *dbus_path,
+		enum ba_fifo_audio fifo_audio,
+		bool direct_fifo_inband,
 		const uint8_t *cconfig,
 		size_t cconfig_size) {
 
 	struct ba_transport *t;
 
-	if ((t = transport_new(device, type, dbus_owner, dbus_path)) == NULL)
+	if ((t = transport_new(device, type, dbus_owner, dbus_path, fifo_audio, direct_fifo_inband)) == NULL)
 		return NULL;
 
 	t->a2dp.ch1_volume = 127;
@@ -284,7 +291,7 @@ struct ba_transport *transport_new_rfcomm(
 	struct ba_transport *t, *t_sco;
 
 	struct ba_transport_type ttype = { .profile = BA_TRANSPORT_PROFILE_RFCOMM };
-	if ((t = transport_new(device, ttype, dbus_owner, dbus_path)) == NULL)
+	if ((t = transport_new(device, ttype, dbus_owner, dbus_path, FIFO_OFF, false)) == NULL)
 		goto fail;
 
 	dbus_path_sco = g_strdup_printf("%s/sco", dbus_path);
@@ -317,7 +324,7 @@ struct ba_transport *transport_new_sco(
 	if (type.profile & BA_TRANSPORT_PROFILE_MASK_HSP)
 		type.codec = HFP_CODEC_CVSD;
 
-	if ((t = transport_new(device, type, dbus_owner, dbus_path)) == NULL)
+	if ((t = transport_new(device, type, dbus_owner, dbus_path, FIFO_OFF, false)) == NULL)
 		return NULL;
 
 	t->sco.spk_gain = 15;
@@ -843,6 +850,8 @@ static int transport_release_bt_a2dp(struct ba_transport *t) {
 	t->bt_fd = -1;
 
 fail:
+	fifo_close();
+
 	if (msg != NULL)
 		g_object_unref(msg);
 	if (rep != NULL)

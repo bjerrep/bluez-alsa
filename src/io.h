@@ -15,6 +15,8 @@
 # include <config.h>
 #endif
 
+void fifo_close();
+
 /* The number of snapshots of BT socket COUTQ bytes. */
 #define IO_THREAD_COUTQ_HISTORY_SIZE 16
 

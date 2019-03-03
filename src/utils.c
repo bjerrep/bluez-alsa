@@ -412,6 +412,25 @@ const char *batostr_(const bdaddr_t *ba) {
 }
 
 /**
+ * Convert fifo type into a human-readable string.
+ *
+ * @param ba_fifo enumeration.
+ * @return Human-readable string. */
+const char *bluetooth_fifo_to_string(enum ba_fifo_audio fifo) {
+	switch (fifo) {
+	case FIFO_OFF:
+		return "ALSA";
+	case FIFO_PCM:
+		return "PCM";
+	case FIFO_RTP:
+		return "RTP";
+	case FIFO_STREAM:
+		return "STREAM";
+	}
+	return "N/A";
+}
+
+/**
  * Scale PCM signal stored in the buffer.
  *
  * Neutral value for scaling factor is 1.0. It is possible to increase

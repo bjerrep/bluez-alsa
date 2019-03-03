@@ -195,8 +195,97 @@ static uint8_t *io_thread_init_rtp(void *s, rtp_header_t **hdr, rtp_media_header
 	return data;
 }
 
+uint8_t fixit_buffer[10000];
+uint8_t mix_buffer[10000];
+int fixit_off = 0;
+int fifo = -1;
+struct timespec ts_tx;
+
+int millisec_elapsed()
+{
+	struct timespec ts_now, ts_res;
+	gettimestamp(&ts_now);
+	difftimespec(&ts_tx, &ts_now, &ts_res);
+	return ts_res.tv_sec / 1000 + ts_res.tv_nsec / 1000;
+}
+
+int fifo_write_audio(const uint8_t* buffer, int length, int flush) {
+	if (buffer) {
+		memcpy(fixit_buffer + fixit_off, buffer, length);
+		fixit_off += length;
+	}
+
+	int ms = millisec_elapsed();
+
+	// the buffering only kicks in for non-pcm data
+	if ((fixit_off > 4096) || (flush && (fixit_off > 0)) || ((ms > 200000) && (fixit_off > 0))) {
+		//debug("elapsed %i ms", ms);
+		gettimestamp(&ts_tx);
+		int len = snprintf(mix_buffer, 100, "::audio=%i::", fixit_off);
+		memcpy(mix_buffer + len, fixit_buffer, fixit_off);
+
+		if (fifo < 0 || (write(fifo, mix_buffer, fixit_off + len) != fixit_off + len)) {
+			debug("stream fifo closed");
+			fixit_off = 0;
+			return -1;
+		}
+		//fixit debug("wrote %i bytes, flush %i", fixit_off + len, flush);
+		fixit_off = 0;
+	}
+	return length;
+}
+
+int fifo_write_direct(const char* buffer, size_t length, int flush_audio) {
+	if (flush_audio) {
+		fifo_write_audio(NULL, 0, 1);
+	}
+	if (fifo < 0 || (write(fifo, buffer, length) != length)) {
+		debug("stream fifo closed");
+		return -1;
+	}
+	return (int) length;
+}
+
+
+int fifo_open() {
+	fixit_off = 0;
+	if ((fifo = open("/tmp/audio", O_WRONLY)) < 0) {
+		error("error opening /tmp/audio fifo");
+		return -1;
+	}
+	return 0;
+}
+
+void fifo_close() {
+	if (fifo >= 0) {
+		char inband[] = "::state=stop::";
+		fifo_write_direct(inband, sizeof(inband) - 1, 1);
+		debug("sending %s", inband);
+		usleep(100000);
+		close(fifo);
+		fifo = -1;
+	}
+}
+
 void *io_thread_a2dp_sink_sbc(void *arg) {
 	struct ba_transport *t = (struct ba_transport *)arg;
+
+	uint8_t muted = t->a2dp.ch1_muted;
+	uint8_t volume = t->a2dp.ch1_volume;
+	char assy_buffer[10000];
+
+	if (t->direct_fifo != FIFO_OFF) {
+		if (fifo_open() < 0 ) {
+			return NULL;
+		}
+		if (t->direct_fifo_inband) {
+			char inband[] = "::codec=sbc::";
+			if (fifo_write_direct(inband, sizeof(inband) - 1, 1) < 0) {
+				fifo_close();
+				return NULL;
+			}
+		}
+	}
 
 	/* Cancellation should be possible only in the carefully selected place
 	 * in order to prevent memory leaks and resources not being released. */
@@ -257,7 +346,10 @@ void *io_thread_a2dp_sink_sbc(void *arg) {
 	transport_pthread_cleanup_unlock(t);
 	locked = false;
 
-	debug("Starting IO loop: %s", ba_transport_type_to_string(t->type));
+	debug("Starting IO loop: %s (%s)",
+		ba_transport_type_to_string(t->type),
+		bluetooth_fifo_to_string(t->direct_fifo));
+
 	for (;;) {
 		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 
@@ -298,9 +390,11 @@ void *io_thread_a2dp_sink_sbc(void *arg) {
 			goto fail;
 		}
 
-		if (t->a2dp.pcm.fd == -1) {
-			seq_number = -1;
-			continue;
+		if (t->direct_fifo == FIFO_OFF) {
+			if (t->a2dp.pcm.fd == -1) {
+				seq_number = -1;
+				continue;
+			}
 		}
 
 		const rtp_header_t *rtp_header = (rtp_header_t *)bt.data;
@@ -322,29 +416,64 @@ void *io_thread_a2dp_sink_sbc(void *arg) {
 			seq_number = _seq_number;
 		}
 
-		/* decode retrieved SBC frames */
-		size_t frames = rtp_media_header->frame_count;
-		while (frames--) {
+		if (t->direct_fifo == FIFO_OFF || t->direct_fifo == FIFO_PCM) {
 
-			ssize_t len;
-			size_t decoded;
+			/* decode retrieved SBC frames */
+			size_t frames = rtp_media_header->frame_count;
+			while (frames--) {
 
-			if ((len = sbc_decode(&sbc, rtp_payload, rtp_payload_len,
-							pcm.data, ffb_blen_in(&pcm), &decoded)) < 0) {
-				error("SBC decoding error: %s", strerror(-len));
-				break;
+				ssize_t len;
+				size_t decoded;
+
+				if ((len = sbc_decode(&sbc, rtp_payload, rtp_payload_len,
+									  pcm.data, ffb_blen_in(&pcm), &decoded)) < 0) {
+					error("SBC decoding error: %s", strerror(-len));
+					break;
+				}
+
+				rtp_payload += len;
+				rtp_payload_len -= len;
+
+				const size_t samples = decoded / sizeof(int16_t);
+				io_thread_scale_pcm(t, pcm.data, samples, channels);
+				if (io_thread_write_pcm(&t->a2dp.pcm, pcm.data, samples) == -1)
+					error("FIFO write error: %s", strerror(errno));
+
+			}
+		}
+		else if (t->direct_fifo == FIFO_RTP) {
+			if (fifo_write_audio((uint8_t*) rtp_header, len, 0) != len) {
+				debug("rtp fifo closed");
+				goto fail;
+			}
+		}
+		else { /* t->direct_fifo == FIFO_STREAM */
+			if (t->direct_fifo_inband) {
+				if (muted != t->a2dp.ch1_muted) {
+					muted = t->a2dp.ch1_muted;
+					debug("mute=%i", muted);
+					int len = snprintf(assy_buffer, 100, "::mute=%i::", muted);
+					if (fifo_write_direct(assy_buffer, len, 1) != len) {
+						debug("stream fifo closed");
+						goto fail;
+					}
+				}
+				if (volume != t->a2dp.ch1_volume) {
+					volume = t->a2dp.ch1_volume;
+					debug("volume=%i", volume);
+					int len = snprintf(assy_buffer, 100, "::volume=%i::", volume);
+					if (fifo_write_direct(assy_buffer, len, 0) != len) {
+						debug("stream fifo closed");
+						goto fail;
+					}
+				}
 			}
 
-			rtp_payload += len;
-			rtp_payload_len -= len;
-
-			const size_t samples = decoded / sizeof(int16_t);
-			io_thread_scale_pcm(t, pcm.data, samples, channels);
-			if (io_thread_write_pcm(&t->a2dp.pcm, pcm.data, samples) == -1)
-				error("FIFO write error: %s", strerror(errno));
-
+			if (fifo_write_audio(rtp_payload, rtp_payload_len, 0) != rtp_payload_len) {
+				debug("stream fifo closed");
+				goto fail;
+			}
 		}
-
 	}
 
 fail:
@@ -356,6 +485,7 @@ fail_ffb:
 	pthread_cleanup_pop(1);
 fail_init:
 	pthread_cleanup_pop(1);
+	fifo_close();
 	return NULL;
 }
 
@@ -585,9 +715,53 @@ fail_init:
 	return NULL;
 }
 
-#if ENABLE_AAC
+//#if ENABLE_AAC
+
+/**
+ *  Add ADTS header at the beginning of each and every AAC packet.
+ *  This is needed as MediaCodec encoder generates a packet of raw
+ *  AAC data.
+ *
+ *  Note the packetLen must count in the ADTS header itself.
+ *
+ *  Lifted from https://stackoverflow.com/a/18970406
+ **/
+void addADTStoPacket(uint8_t* packet, uint packetLen) {
+	int profile = 2;  //AAC LC
+					  //39=MediaCodecInfo.CodecProfileLevel.AACObjectELD;
+	int freqIdx = 4;  //44.1KHz
+	int chanCfg = 2;  //CPE
+
+	// fill in ADTS data
+	packet[0] = 0xFF;
+	packet[1] = 0xF9;
+	packet[2] = (uint8_t) (((profile-1) << 6) + (freqIdx << 2) +(chanCfg >> 2)); // fixit casts
+	packet[3] = (uint8_t) (((chanCfg & 3) << 6) + (packetLen >> 11));
+	packet[4] = (uint8_t) ((packetLen & 0x7FF) >> 3);
+	packet[5] = (uint8_t) (((packetLen & 7) << 5) + 0x1F);
+	packet[6] = 0xFC;
+}
+
 void *io_thread_a2dp_sink_aac(void *arg) {
 	struct ba_transport *t = (struct ba_transport *)arg;
+
+	uint8_t muted = t->a2dp.ch1_muted;
+	uint8_t volume = t->a2dp.ch1_volume;
+	char assy_buffer[10000];
+	/*
+		FILE* raw_aac_file = fopen("<path>/raw_aac.aac", "ab");
+		FILE* raw_adts_file = fopen("<path>/raw_adts.aac", "ab");
+	*/
+	if (t->direct_fifo != FIFO_OFF) {
+		fifo_open();
+		if (t->direct_fifo_inband) {
+			char inband[] = "::codec=aac::";
+			if (fifo_write_direct(inband, sizeof(inband) - 1, 1) < 0) {
+				fifo_close();
+				return NULL;
+			}
+		}
+	}
 
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 	pthread_cleanup_push(PTHREAD_CLEANUP(transport_pthread_cleanup), t);
@@ -699,9 +873,11 @@ void *io_thread_a2dp_sink_aac(void *arg) {
 			goto fail;
 		}
 
-		if (t->a2dp.pcm.fd == -1) {
-			seq_number = -1;
-			continue;
+		if (t->direct_fifo == FIFO_OFF) {
+			if (t->a2dp.pcm.fd == -1) {
+				seq_number = -1;
+				continue;
+			}
 		}
 
 		const rtp_header_t *rtp_header = (rtp_header_t *)bt.data;
@@ -752,20 +928,62 @@ void *io_thread_a2dp_sink_aac(void *arg) {
 		unsigned int data_len = ffb_len_out(&latm);
 		unsigned int valid = ffb_len_out(&latm);
 
-		if ((err = aacDecoder_Fill(handle, &latm.data, &data_len, &valid)) != AAC_DEC_OK)
-			error("AAC buffer fill error: %s", aacdec_strerror(err));
-		else if ((err = aacDecoder_DecodeFrame(handle, pcm.tail, ffb_blen_in(&pcm), 0)) != AAC_DEC_OK)
-			error("AAC decode frame error: %s", aacdec_strerror(err));
-		else if ((aacinf = aacDecoder_GetStreamInfo(handle)) == NULL)
-			error("Couldn't get AAC stream info");
-		else {
-			const size_t samples = aacinf->frameSize * aacinf->numChannels;
-			io_thread_scale_pcm(t, pcm.data, samples, channels);
-			if (io_thread_write_pcm(&t->a2dp.pcm, pcm.data, samples) == -1)
-				error("FIFO write error: %s", strerror(errno));
+		if (t->direct_fifo == FIFO_OFF || t->direct_fifo == FIFO_PCM) {
+			error("not implemented in direct audio");
+		}
+		else if (t->direct_fifo == FIFO_RTP) {
+			error("not implemented in direct audio");
+		}
+		else { /* (t->direct_fifo == FIFO_STREAM) */
+
+			// Replace 'latm' header with a adts header. Nobody except the fdkaac decoder used
+			// natively by bluealsa seems to understand it.
+			// The latm header uses a variable length size field:
+			int length = *(latm.data + 9);
+			int adts_offset = 3;
+			if (*(latm.data + 9) == 0xFF && *(latm.data + 10) == 0xFF) {
+				adts_offset = 5;
+				length = 2 * 0xFF + *(latm.data + 11);
+			}
+			else if (*(latm.data + 9) == 0xFF) {
+				adts_offset = 4;
+				length = 0xFF + *(latm.data + 10);
+			}
+
+			//if (raw_aac_file > 0) { fwrite(latm.data, 1, data_len, raw_aac_file); }
+
+			addADTStoPacket(latm.data + adts_offset, data_len - adts_offset);
+
+			//if (raw_adts_file > 0) { fwrite(latm.data + adts_offset, 1, data_len - adts_offset, raw_adts_file); }
+
+			if (t->direct_fifo_inband) {
+				if (muted != t->a2dp.ch1_muted) {
+					muted = t->a2dp.ch1_muted;
+					debug("mute=%i", muted);
+					int len = snprintf(assy_buffer, 100, "::mute=%i::", muted);
+					if (fifo_write_direct(assy_buffer, len, 1) != len) {
+						debug("stream fifo closed");
+						goto fail;
+					}
+				}
+				if (volume != t->a2dp.ch1_volume) {
+					volume = t->a2dp.ch1_volume;
+					debug("volume=%i", volume);
+					int len = snprintf(assy_buffer, 100, "::volume=%i::", volume);
+					if (fifo_write_direct(assy_buffer, len, 0) != len) {
+						debug("stream fifo closed");
+						goto fail;
+					}
+				}
+			}
+
+			if (fifo_write_audio(latm.data + adts_offset, data_len - adts_offset, 0) != data_len - adts_offset) {
+				debug("stream fifo closed");
+				goto fail;
+			}
+
 			ffb_rewind(&latm);
 		}
-
 	}
 
 fail:
@@ -779,9 +997,10 @@ fail_init:
 	pthread_cleanup_pop(1);
 fail_open:
 	pthread_cleanup_pop(1);
+	fifo_close();
 	return NULL;
 }
-#endif
+//#endif
 
 #if ENABLE_AAC
 void *io_thread_a2dp_source_aac(void *arg) {
