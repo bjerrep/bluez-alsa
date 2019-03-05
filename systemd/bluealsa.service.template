@@ -1,0 +1,22 @@
+#
+# on Arch as /etc/systemd/system/multi-user.target.wants/bluealsa.service
+#
+[Unit]
+Description=BluezAlsa proxy
+Requires=bluetooth.service
+After=bluetooth.service
+
+[Service]
+Type=simple
+User=root
+Group=audio
+ExecStartPre=-/usr/bin/mkfifo /tmp/audio
+ExecStartPre=-/bin/chown -R <user>:<group> /tmp/audio
+ExecStart=/home/<user>/src/bluez-alsa/build/src/bluealsa -p a2dp-sink --a2dp-fifo=stream --inband
+#CPUSchedulingPolicy=rr
+#CPUSchedulingPriority=99
+#LimitRTPRIO=99
+#LimitRTTIME=infinity
+
+[Install]
+WantedBy=multi-user.target
