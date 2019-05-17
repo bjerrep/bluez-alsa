@@ -1,5 +1,5 @@
 #
-# on Arch as /etc/systemd/system/multi-user.target.wants/bluealsa.service
+# on Arch as /usr/lib/systemd/system/bluealsa.service
 #
 [Unit]
 Description=BluezAlsa proxy
@@ -11,8 +11,10 @@ Type=simple
 User=root
 Group=audio
 ExecStartPre=-/usr/bin/mkfifo /tmp/audio
-ExecStartPre=-/bin/chown -R <user>:<group> /tmp/audio
+#ExecStartPre=-/bin/chown -R <user>:<group> /tmp/audio
+ExecStartPre=-/usr/bin/rm /var/run/bluealsa -rf
 ExecStart=/home/<user>/src/bluez-alsa/build/src/bluealsa -p a2dp-sink --a2dp-fifo=stream --inband
+
 #CPUSchedulingPolicy=rr
 #CPUSchedulingPriority=99
 #LimitRTPRIO=99
