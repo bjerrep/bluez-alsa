@@ -928,11 +928,17 @@ void *io_thread_a2dp_sink_aac(void *arg) {
 		unsigned int data_len = ffb_len_out(&latm);
 		unsigned int valid = ffb_len_out(&latm);
 
-		if (t->direct_fifo == FIFO_OFF || t->direct_fifo == FIFO_PCM) {
-			error("not implemented in direct audio");
+		if (t->direct_fifo == FIFO_OFF) {
+			error("FIFO_OFF not implemented in direct audio");
+			goto fail;
+		}
+		else if (t->direct_fifo == FIFO_PCM) {
+			error("FIFO_PCM not implemented in direct audio");
+			goto fail;
 		}
 		else if (t->direct_fifo == FIFO_RTP) {
-			error("not implemented in direct audio");
+			error("FIFO_RTP not implemented in direct audio");
+			goto fail;
 		}
 		else { /* (t->direct_fifo == FIFO_STREAM) */
 
